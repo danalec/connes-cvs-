@@ -34,26 +34,25 @@ REPO = os.path.dirname(HERE)
 
 
 def _resolve_data_dir() -> str:
+    # A candidate qualifies only when it holds every file CELLS loads.
+    # Checking a subset would let a partial bundle pass here and fail
+    # later inside make_figure with an opaque missing-file traceback.
+    required = [meta["file"] for meta in CELLS]
     for candidate in (
         os.path.join(REPO, "data", "c100"),                  # source-repo layout
         os.path.join(REPO, "data", "c100_verification"),     # Zenodo-bundle layout
     ):
-        # Require at least one of the gamma-extraction files to be present.
-        if os.path.isdir(candidate) and any(
-            os.path.exists(os.path.join(candidate, f))
-            for f in (
-                "c100_N250_dps500_gamma_extraction.json",
-                "c100_N150_dps1000_gamma_extraction.json",
-            )
+        if os.path.isdir(candidate) and all(
+            os.path.exists(os.path.join(candidate, name)) for name in required
         ):
             return candidate
     raise FileNotFoundError(
         "Could not locate the gamma_extraction JSONs in any of the "
-        "candidate data directories."
+        "candidate data directories; all of these files are required: "
+        + ", ".join(meta["file"] for meta in CELLS)
     )
 
 
-DATA_DIR = _resolve_data_dir()
 DEFAULT_OUT = os.path.join("figures", "fig10_c100_gamma_digits.pdf")
 
 CELLS = [
@@ -84,8 +83,8 @@ CELLS = [
 ]
 
 
-def load_cell(meta: dict) -> tuple[list[int], list[int]]:
-    path = os.path.join(DATA_DIR, meta["file"])
+def load_cell(meta: dict, data_dir: str) -> tuple[list[int], list[int]]:
+    path = os.path.join(data_dir, meta["file"])
     with open(path, encoding="utf-8") as handle:
         d = json.load(handle)
     ks, digits = [], []
@@ -98,7 +97,7 @@ def load_cell(meta: dict) -> tuple[list[int], list[int]]:
     return ks, digits
 
 
-def make_figure(out_path: str) -> None:
+def make_figure(out_path: str, data_dir: str) -> None:
     plt.rcParams.update({
         "font.family": "serif",
         "font.serif": ["cmr10", "Computer Modern Roman", "STIX Two Text",
@@ -123,7 +122,7 @@ def make_figure(out_path: str) -> None:
     fig, ax = plt.subplots(figsize=(7.2, 4.5))
 
     for meta in CELLS:
-        ks, digits = load_cell(meta)
+        ks, digits = load_cell(meta, data_dir)
         ax.plot(ks, digits,
                 marker=meta["marker"], linestyle=meta["linestyle"],
                 color=meta["color"], linewidth=1.6, markersize=7,
@@ -157,11 +156,13 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--out", default=DEFAULT_OUT, help="output PDF path")
     args = p.parse_args(argv)
-    if not os.path.isdir(DATA_DIR):
-        print(f"error: data directory not found at {DATA_DIR}", file=sys.stderr)
+    try:
+        data_dir = _resolve_data_dir()
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 2
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-    make_figure(args.out)
+    make_figure(args.out, data_dir)
     print(f"wrote {args.out}")
     return 0
 

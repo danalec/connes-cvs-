@@ -29,10 +29,18 @@ def _manifest():
 
 def _relative_files(directory: str):
     root = ROOT / directory
+    # Recursive: the shipped manifest carries nested paths (for example
+    # benchmarks/AB_VERIFIED_2026-04-14.md and
+    # data/third_party/karl-keysingularity/README.md), so a top-level-only
+    # walk cannot see a new public file below the first level and would
+    # silently accept it not shipping.
     files = {
         path.relative_to(ROOT).as_posix()
-        for path in root.iterdir()
-        if path.is_file() and path.name != ".DS_Store"
+        for path in root.rglob("*")
+        if path.is_file()
+        and path.name != ".DS_Store"
+        and "__pycache__" not in path.parts
+        and path.suffix not in {".pyc", ".pyo"}
     }
     if not (ROOT / ".git").exists():
         # An archive has no Git exclusions. Verify a clean source export here.
@@ -56,10 +64,17 @@ def _relative_files(directory: str):
 
 
 def test_release_manifest_is_canonical_and_self_consistent():
+    import connes_cvs
+
     module = _verifier_module()
     manifest = module._load_manifest(MANIFEST_PATH)
     assert manifest["distribution"] == "connes-cvs"
-    assert manifest["version"] == "0.3.1"
+    assert manifest["version"] == connes_cvs.__version__, (
+        f"release manifest version ({manifest['version']}) must match "
+        f"connes_cvs.__version__ ({connes_cvs.__version__}); pyproject and "
+        "installer metadata are bound to both in the verifier and the "
+        "c13 regression suite"
+    )
     assert ".github/release-files.json" in manifest["sdist_files"]
     assert "tools/verify_release.py" in manifest["sdist_files"]
     assert len(manifest["sdist_files"]) == len(set(manifest["sdist_files"]))
@@ -79,14 +94,8 @@ def test_every_package_test_example_and_public_data_file_is_allowlisted():
         assert _relative_files(directory) <= sdist, directory
     assert not any(name.startswith("papers/") for name in sdist)
 
-    expected_tests = _relative_files("tests") - {
-        "tests/test_paper2_public_artifacts.py"
-    }
-    expected_examples = {
-        name
-        for name in _relative_files("examples")
-        if "paper2" not in Path(name).name
-    }
+    expected_tests = _relative_files("tests")
+    expected_examples = _relative_files("examples")
     assert expected_tests <= sdist
     assert expected_examples <= sdist
 
@@ -95,11 +104,9 @@ def test_every_package_test_example_and_public_data_file_is_allowlisted():
         "data/third_party/karl-keysingularity/2026-08-02_c13_validation_artifact.json",
         "examples/make_fig9_c100_aitken.py",
         "examples/make_fig10_c100_gamma_digits.py",
-        "tests/test_paper2_public_artifacts.py",
         "tests/test_validation.py",
     }
-    assert required - {"tests/test_paper2_public_artifacts.py"} <= sdist
-    assert "tests/test_paper2_public_artifacts.py" not in sdist
+    assert required <= sdist
     assert not any(name.startswith("data/paper2/") for name in sdist)
     assert not any("paper2" in Path(name).name for name in sdist if name.startswith("examples/"))
 
